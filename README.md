@@ -71,7 +71,7 @@ An intelligent task management automation system that integrates Frappe ERPNext 
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/yourusername/erpnext-n8n-automation.git
+git clone https://github.com/mirzaareebbaig/ERPNext-AI-Project-Management.git
 cd erpnext-n8n-automation
 ```
 
