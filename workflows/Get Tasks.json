@@ -1,0 +1,148 @@
+{
+  "name": "Get Tasks",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        -16
+      ],
+      "id": "6ca214b1-078e-4c92-956e-b4e5cf8a364b",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "http://erp.alrlabs.com:8000/api/resource/Task?fields=[\"name\",\"subject\",\"description\",\"status\",\"priority\",\"project\",\"exp_end_date\",\"custom_assigned_to\",\"custom_assigned_name\"]",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        -16
+      ],
+      "id": "1fbdfaf7-f198-4110-b29c-66f799a78d7b",
+      "name": "HTTP Request",
+      "alwaysOutputData": false,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "CWaZkfq9HhC0Socc",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        208,
+        -16
+      ],
+      "id": "2ce87f78-8b23-450a-90a5-ea86cfac35d0",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all tasks from input\nconst allItems = $input.all();\nconst userTasks = {};\n\n// Group tasks by assigned user\nallItems.forEach(item => {\n  const task = item.json;\n  const assignedTo = task.custom_assigned_to;\n  const assignedName = task.custom_assigned_name;\n  \n  if (assignedTo) {\n    if (!userTasks[assignedTo]) {\n      userTasks[assignedTo] = {\n        user_name: assignedName || 'No Name',\n        user_email: assignedTo,\n        tasks: [],\n        tasks_html: ''\n      };\n    }\n    userTasks[assignedTo].tasks.push({\n      id: task.name,\n      subject: task.subject || 'No Subject',\n      description: task.description || 'No Description',\n      priority: task.priority || 'Medium',\n      exp_end_date: task.exp_end_date || 'No Due Date',\n      status: task.status || 'Open',\n      project: task.project || 'No Project'\n    });\n  }\n});\n\n// Format tasks as HTML for each user\nreturn Object.keys(userTasks).map(user => {\n  const userData = userTasks[user];\n  \n  // Create HTML for all tasks\n  const tasksHTML = userData.tasks.map(task => `\n    <div style=\"border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;\">\n      <h3 style=\"color: #2c5aa0; margin: 0 0 10px 0;\">${task.subject}</h3>\n      <p><strong>Task ID:</strong> ${task.id}</p>\n      <p><strong>Description:</strong> ${task.description}</p>\n      <p><strong>Priority:</strong> <span style=\"color: ${task.priority === 'High' ? 'red' : task.priority === 'Medium' ? 'orange' : 'green'};\">${task.priority}</span></p>\n      <p><strong>Expected End Date:</strong> ${task.exp_end_date}</p>\n      <p><strong>Current Status:</strong> ${task.status}</p>\n      ${task.project !== 'No Project' ? `<p><strong>Project:</strong> ${task.project}</p>` : ''}\n    </div>\n  `).join('');\n  \n  return {\n    user_email: userData.user_email,\n    user_name: userData.user_name,\n    task_count: userData.tasks.length,\n    tasks_html: tasksHTML,\n    tasks: userData.tasks // Keep original array for reference\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -16
+      ],
+      "id": "a48aaa39-02fa-4928-831e-c1472d27cc1d",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@onebrain.site",
+        "toEmail": "={{ $json.user_email }}",
+        "subject": "=Hey, {{ $json.user_name }} here is your Daily Task Reminder ",
+        "html": "=Hey, {{ $json.user_name }}<br><br>\n\nThis is your AI bot assisting with your pending tasks here is the pending tasks from your side.<br><br>\n\nTotal Tasks Pending : {{ $json.task_count }}<br><br>\n{{ $json.tasks_html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        624,
+        -16
+      ],
+      "id": "4750f101-33e6-49ac-9d4b-2ca121bdcf07",
+      "name": "Send email",
+      "webhookId": "5921a7b8-11f4-4b71-b922-7d090b7b4488",
+      "credentials": {
+        "smtp": {
+          "id": "Ch2Q5k2YiUnzM4SZ",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3b858d7e-7e4c-4dc2-a60a-6fbeedad5df9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f84e3eae96e080ad7b0d94024b31be35998311461a5999700493071399945c7c"
+  },
+  "id": "E6g7X6WVAIBOYwt3",
+  "tags": []
+}

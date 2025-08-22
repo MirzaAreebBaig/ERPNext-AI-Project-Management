@@ -1,0 +1,540 @@
+{
+  "name": "Email Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "fcfb025e-8e2e-4d4f-92fc-61906989fa6f",
+      "name": "Email Trigger (IMAP)",
+      "credentials": {
+        "imap": {
+          "id": "o00ft3AC4WLlqPbC",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try multiple possible email address properties\nconst fromEmail = $json.from?.address || \n                  $json.from?.email || \n                  $json.from ||\n                  $json.fromEmail ||\n                  $json.sender?.address ||\n                  $json.sender?.email ||\n                  $json.sender ||\n                  $json.from_email ||\n                  ($json.envelope && $json.envelope.from && $json.envelope.from[0] && $json.envelope.from[0].address) ||\n                  'unknown@email.com';\nconst subject = $json.subject;\n\n// Try multiple possible email body properties\nlet emailBody = $json.text || $json.html || $json.textHtml || $json.bodyText || $json.body;\n\n// If still no body found, try nested structures\nif (!emailBody) {\n  emailBody = $json.textAsHtml || \n              $json.textAsText ||\n              ($json.body && $json.body.text) ||\n              ($json.body && $json.body.html) ||\n              ($json.content && $json.content.text) ||\n              ($json.content && $json.content.html);\n}\n\n// Clean up email content - remove quoted text\nif (emailBody) {\n  // Remove common reply patterns\n  emailBody = emailBody.split('On ')[0]\n                      .split('-----Original Message-----')[0]\n                      .split('From:')[0]\n                      .split('________________________________')[0]\n                      .split('> ')[0]  // Remove quoted text starting with >\n                      .trim();\n  \n  // Remove HTML tags if present\n  emailBody = emailBody.replace(/<[^>]*>/g, '').trim();\n  \n  // Remove extra whitespace and line breaks\n  emailBody = emailBody.replace(/\\s+/g, ' ').trim();\n}\n\nreturn {\n  user_email: fromEmail,\n  content: emailBody,\n  original_subject: subject,\n  received_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "e0396086-f900-4f56-bca1-fe27dad8b2db",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are an AI assistant that processes task management email replies. Analyze the user's email and extract actions they want to perform.\nReturn your response as valid JSON with this exact structure:\n{\n  \"user_email\": \"string (sender's email address)\",\n  \"actions\": [\n    {\n      \"type\": \"update_task|create_task|log_time|request_help\",\n      \"task_id\": \"string (only for update_task, log_time)\",\n      \"status\": \"string (only for update_task - use: Open, Working, Completed, Cancelled)\",\n      \"task_description\": \"string (only for create_task)\",\n      \"priority\": \"High|Medium|Low (only for create_task)\",\n      \"hours\": \"number (only for log_time)\",\n      \"time_description\": \"string (only for log_time)\",\n      \"help_message\": \"string (only for request_help)\",\n      \"confidence\": \"number (0-1, how confident you are about this action)\"\n    }\n  ]\n}\nRules:\n- Always include the sender's email address in the \"user_email\" field\n- If user says a task is \"done\", \"completed\", \"finished\" → type: \"update_task\", status: \"Completed\"\n- If user mentions working on a task → type: \"update_task\", status: \"Working\" \n- If user requests a new task or mentions \"need to do X\" → type: \"create_task\"\n- If user mentions time spent → type: \"log_time\"\n- If user has problems/questions → type: \"request_help\"\n- Extract task IDs from formats like \"TASK-2025-00001\"\n- Default priority for new tasks is \"Medium\""
+            },
+            {
+              "content": "={{ $json.original_subject }}{{ $json.content }}{{ $json.user_email }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        416,
+        0
+      ],
+      "id": "4b792a39-4bb5-4321-ba2f-b6d92f15a1ec",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "YKSBjjgTLl5hpPny",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let aiResponse;\nlet userEmail, originalContent;\n\n// Safely extract data from previous node\ntry {\n  const extractEmailNode = $('Extract Email Content').item(0);\n  if (extractEmailNode && extractEmailNode.json) {\n    userEmail = extractEmailNode.json.user_email;\n    originalContent = extractEmailNode.json.content;\n  } else {\n    // Fallback - try to get data from current input\n    userEmail = $json.user_email || 'unknown@email.com';\n    originalContent = $json.content || $json.original_content || 'No content available';\n  }\n} catch (nodeError) {\n  console.log('Node reference error:', nodeError.message);\n  // Fallback - try to get data from current input or use defaults\n  userEmail = $json.user_email || $json.from?.address || 'unknown@email.com';\n  originalContent = $json.content || $json.text || $json.html || 'No content available';\n}\n\ntry {\n  // Handle different AI response structures\n  let aiContent;\n  if ($json.choices && $json.choices[0] && $json.choices[0].message && $json.choices[0].message.content) {\n    aiContent = $json.choices[0].message.content;\n  } else if ($json.content) {\n    aiContent = $json.content;\n  } else if ($json.message && $json.message.content) {\n    aiContent = $json.message.content;\n  } else {\n    throw new Error('Could not find AI response content');\n  }\n  \n  console.log('Raw AI Response:', aiContent); // Debug log\n  \n  // Extract JSON from AI response (sometimes AI adds extra text)\n  const jsonMatch = aiContent.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsedResponse = JSON.parse(jsonMatch[0]);\n    aiResponse = parsedResponse;\n    console.log('Parsed AI Response:', JSON.stringify(aiResponse, null, 2)); // Debug log\n  } else {\n    throw new Error('No JSON found in AI response');\n  }\n} catch (e) {\n  console.log('Parsing error:', e.message); // Debug log\n  // Fallback - create help request if AI parsing fails\n  aiResponse = {\n    user_email: userEmail,\n    actions: [{\n      type: 'request_help',\n      help_message: `Could not process your request: \"${originalContent}\". Please try again with clearer instructions.`,\n      confidence: 0.1\n    }]\n  };\n}\n\n// Extract actions from AI response\nconst actions = aiResponse.actions || [];\n\n// Use user_email from AI response if available, otherwise fallback to extracted email\nconst responseUserEmail = aiResponse.user_email || userEmail;\n\nreturn actions.map(action => ({\n  ...action,\n  user_email: responseUserEmail,\n  timestamp: new Date().toISOString(),\n  original_content: originalContent\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        0
+      ],
+      "id": "fcd217e2-db04-45de-a6d1-be8852a052cf",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "63a9e722-be63-4925-8826-ac2802929a14",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "update_task",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        -48
+      ],
+      "id": "8a984d71-158a-4220-a2f9-c6ff2a2148c6",
+      "name": "update_task"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://erp.alrlabs.com:8000/api/resource/Task/{{ $json.task_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "Completed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        -32
+      ],
+      "id": "5ae4678a-cf0e-4eec-9216-6d55449be5eb",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "CWaZkfq9HhC0Socc",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@onebrain.site",
+        "toEmail": "={{ $json.data.custom_assigned_to }}",
+        "subject": "=Hey, {{ $json.data.custom_assigned_name }} Your Task is Completed",
+        "html": "=Hey, {{ $json.data.custom_assigned_name }}<br><br>\n\nI have updated your task : {{ $json.data.name }}<br><br>\n\nTo Completed",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1808,
+        -32
+      ],
+      "id": "cd13c949-70f8-45bb-a492-f35b144f6a9e",
+      "name": "Send email",
+      "webhookId": "735eee28-730e-470a-b069-a86d8627d63d",
+      "credentials": {
+        "smtp": {
+          "id": "Ch2Q5k2YiUnzM4SZ",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dd1be0d5-e666-4ddc-ba59-41ddd488b623",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "create_task",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        128
+      ],
+      "id": "f307fd90-7e96-4c13-8ba5-87bdb59a5288",
+      "name": "create_task"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "75c62e50-ff14-473f-b799-0cf26e962e8a",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "request_help",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        304
+      ],
+      "id": "928d2894-afff-4265-ae18-6adc99c6a05e",
+      "name": "request_help"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://erp.alrlabs.com:8000/api/resource/Task",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"subject\": \"{{ $json.task_description }}\",\n  \"status\": \"Open\",\n  \"description\": \"{{ $json.task_description }}\",\n  \"custom_assigned_to\": \"{{ $json.user_email }}\"\n}\n ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1632,
+        160
+      ],
+      "id": "4992cf30-e7ca-4af7-9dba-4b46d6e04d26",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "CWaZkfq9HhC0Socc",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@onebrain.site",
+        "toEmail": "={{ $json.data.custom_assigned_to }}",
+        "subject": "=Created New Task : {{ $json.data.name }}",
+        "html": "=Hey, {{ $json.data.custom_assigned_name }},<br><br>\n\nI have created a new Task for your <br>\nTask ID : {{ $json.data.name }}<br>\nSubject : {{ $json.data.subject }}<br>\nStatus : {{ $json.data.status }}<br>\nPriority : {{ $json.data.priority }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1840,
+        160
+      ],
+      "id": "ff4edb73-82c9-4b3d-a6b3-c80e4d1e6828",
+      "name": "Send email1",
+      "webhookId": "fa5e8354-d22f-4d6b-867c-0e5f9316e9fa",
+      "credentials": {
+        "smtp": {
+          "id": "Ch2Q5k2YiUnzM4SZ",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5bb8e386-353c-4048-8ad2-2df8ae49486a",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "log_time",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        496
+      ],
+      "id": "702f26e3-7be3-4cd2-96be-3002a1701d88",
+      "name": "log_time"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://erp.alrlabs.com:8000//api/resource/Timesheet",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"employee\": \"{{ $json.updated_timesheet.employee }}\",\n  \"time_logs\": [\n    {\n      \"activity_type\": \"Development\",\n      \"from_time\": \"{{ $json.parsed_time_info.from_time }}\",\n      \"to_time\": \"{{ $json.parsed_time_info.to_time }}\",\n      \"hours\": {{ $json.parsed_time_info.calculatedHours }},\n      \"description\": \"{{ $json.log_action.time_description }}\"\n    }\n  ]\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        448
+      ],
+      "id": "3d92582d-d5b8-4e59-b476-98be013e5b8d",
+      "name": "HTTP Request2",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "CWaZkfq9HhC0Socc",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the log_time action data from current input\nconst logTimeAction = {\n  type: $json.type,\n  task_id: $json.task_id,\n  hours: parseFloat($json.hours || 0),\n  time_description: $json.time_description || '',\n  confidence: $json.confidence || 0,\n  user_email: $json.user_email || '',\n  timestamp: $json.timestamp || new Date().toISOString(),\n  original_content: $json.original_content || ''\n};\n\n// Get the current timesheet JSON (you'll need to provide this or get it from another source)\nlet timesheet = $json.timesheet || {\n  \"employee\": \"HR-EMP-00002\",\n  \"start_date\": \"2025-08-22\",\n  \"end_date\": \"2025-08-22\",\n  \"time_logs\": []\n};\n\n// Parse time from description if available (e.g., \"1 pm to 3 pm\")\nfunction parseTimeFromDescription(description) {\n  const timePattern = /(\\d{1,2})\\s*(am|pm)\\s*to\\s*(\\d{1,2})\\s*(am|pm)/i;\n  const match = description.match(timePattern);\n  \n  if (match) {\n    const [, fromHour, fromAmPm, toHour, toAmPm] = match;\n    \n    // Convert to 24-hour format\n    let from24 = parseInt(fromHour);\n    let to24 = parseInt(toHour);\n    \n    if (fromAmPm.toLowerCase() === 'pm' && from24 !== 12) from24 += 12;\n    if (fromAmPm.toLowerCase() === 'am' && from24 === 12) from24 = 0;\n    if (toAmPm.toLowerCase() === 'pm' && to24 !== 12) to24 += 12;\n    if (toAmPm.toLowerCase() === 'am' && to24 === 12) to24 = 0;\n    \n    const currentDate = new Date().toISOString().split('T')[0];\n    \n    return {\n      from_time: `${currentDate} ${from24.toString().padStart(2, '0')}:00:00`,\n      to_time: `${currentDate} ${to24.toString().padStart(2, '0')}:00:00`,\n      calculatedHours: to24 - from24\n    };\n  }\n  \n  return null;\n}\n\n// Get current date for timesheet\nconst currentDate = new Date().toISOString().split('T')[0];\n\n// Parse time information\nconst timeInfo = parseTimeFromDescription(logTimeAction.time_description);\n\n// Create new time log entry\nconst newTimeLog = {\n  activity_type: \"Development\", // Default, could be made dynamic\n  hours: logTimeAction.hours,\n  task: logTimeAction.task_id\n};\n\n// Add time information if parsed successfully\nif (timeInfo) {\n  newTimeLog.from_time = timeInfo.from_time;\n  newTimeLog.to_time = timeInfo.to_time;\n  // Use parsed hours if they match, otherwise use provided hours\n  if (Math.abs(timeInfo.calculatedHours - logTimeAction.hours) < 0.1) {\n    newTimeLog.hours = timeInfo.calculatedHours;\n  }\n} else {\n  // If no specific times found, add entry without from/to times\n  // This will be a duration-only entry\n  console.log('Could not parse specific times from description, using hours only');\n}\n\n// Update timesheet\nif (!timesheet.time_logs) {\n  timesheet.time_logs = [];\n}\n\n// Set current date as start/end date\ntimesheet.start_date = currentDate;\ntimesheet.end_date = currentDate;\n\n// Add the new time log entry\ntimesheet.time_logs.push(newTimeLog);\n\n// Return updated timesheet\nreturn {\n  updated_timesheet: timesheet,\n  log_action: logTimeAction,\n  parsed_time_info: timeInfo,\n  success: true,\n  message: `Added ${logTimeAction.hours} hours for task ${logTimeAction.task_id}`\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        400
+      ],
+      "id": "b37c0f23-c73f-49a8-8f80-bb4980c7585d",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@onebrain.site",
+        "toEmail": "={{ $json.data.custom_employee_email }}",
+        "subject": "=Hey,  {{ $json.data.employee_name }} Added Your Timesheet",
+        "html": "=Hey ,  {{ $json.data.employee_name }},<br><br>\nI have added the timesheet for you : {{ $json.data.name }}<br>\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1808,
+        448
+      ],
+      "id": "e96aee33-117c-4883-97b9-357e85f01651",
+      "name": "Send email2",
+      "webhookId": "37eb7738-336c-4335-bd0a-28001313633e",
+      "credentials": {
+        "smtp": {
+          "id": "Ch2Q5k2YiUnzM4SZ",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "update_task",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "create_task",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "request_help",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "log_time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "update_task": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_task": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Send email1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log_time": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Send email2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f5790904-7f06-4f02-9b16-60ec62f97673",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f84e3eae96e080ad7b0d94024b31be35998311461a5999700493071399945c7c"
+  },
+  "id": "jGKYUvYv9gcaSUl6",
+  "tags": []
+}
